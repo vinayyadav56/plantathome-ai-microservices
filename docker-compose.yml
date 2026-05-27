@@ -1,0 +1,195 @@
+version: "3.9"
+
+volumes:
+  esdata:
+  rabbitmq_data:
+
+services:
+
+  # ─────────────────────────────────────────────
+  # INFRASTRUCTURE
+  # ─────────────────────────────────────────────
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASS}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - recommendation-service
+      - chatbot-service
+      - plant-doctor-service
+      - seo-service
+      - semantic-search-service
+      - notification-service
+      - media-service
+      - analytics-service
+
+  # ─────────────────────────────────────────────
+  # AI MICROSERVICES
+  # ─────────────────────────────────────────────
+
+  recommendation-service:
+    build: ./recommendation-service
+    ports:
+      - "8001:8001"
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+    depends_on:
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - ./recommendation-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+
+  chatbot-service:
+    build: ./chatbot-service
+    ports:
+      - "8002:8002"
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./chatbot-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8002 --reload
+
+  plant-doctor-service:
+    build: ./plant-doctor-service
+    ports:
+      - "8003:8003"
+    env_file: .env
+    volumes:
+      - ./plant-doctor-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8003 --reload
+
+  seo-service:
+    build: ./seo-service
+    ports:
+      - "8004:8004"
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./seo-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8004 --reload
+
+  semantic-search-service:
+    build: ./semantic-search-service
+    ports:
+      - "8005:8005"
+    env_file: .env
+    environment:
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - ./semantic-search-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8005 --reload
+
+  notification-service:
+    build: ./notification-service
+    ports:
+      - "8006:8006"
+    env_file: .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@rabbitmq:5672/
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./notification-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8006 --reload
+
+  media-service:
+    build: ./media-service
+    ports:
+      - "8007:8007"
+    env_file: .env
+    volumes:
+      - ./media-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8007 --reload
+
+  analytics-service:
+    build: ./analytics-service
+    ports:
+      - "8008:8008"
+    env_file: .env
+    environment:
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    volumes:
+      - ./analytics-service:/app
+    command: uvicorn main:app --host 0.0.0.0 --port 8008 --reload
+
+networks:
+  default:
+    name: plantathome-network

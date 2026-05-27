@@ -1,0 +1,8 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+python-dotenv==1.0.1
+Pillow==10.4.0
+rembg==2.0.57
+boto3==1.35.0
+onnxruntime==1.19.2
