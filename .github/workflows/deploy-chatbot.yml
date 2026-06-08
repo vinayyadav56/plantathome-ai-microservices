@@ -96,29 +96,36 @@ jobs:
             --set "REDIS_URL=${REDIS_REF}" \
             --skip-deploys
 
-      - name: Deploy (railway up) + fetch build logs on failure
+      - name: Deploy (railway up)
+        id: up
+        continue-on-error: true
         working-directory: chatbot-service
         run: |
           set +e
           railway up --service "$SERVICE_NAME" --ci 2>&1 | tee /tmp/up.log
           UPCODE=${PIPESTATUS[0]}
           DEP_ID=$(grep -oE 'id=[0-9a-f-]+' /tmp/up.log | head -1 | cut -d= -f2)
+          echo "DEP_ID=$DEP_ID" >> "$GITHUB_ENV"
+          echo "up_code=$UPCODE" >> "$GITHUB_OUTPUT"
           echo "deployment id: $DEP_ID (railway up exit $UPCODE)"
-          if [ -n "$DEP_ID" ]; then
-            echo "===== BUILD LOGS ====="
-            q='{"query":"query($d:String!){buildLogs(deploymentId:$d){message}}","variables":{"d":"'"$DEP_ID"'"}}'
-            curl -sS -X POST https://backboard.railway.app/graphql/v2 \
-              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
-              --data "$q" \
-              | python3 -c "import json,sys; d=json.load(sys.stdin); logs=(d.get('data') or {}).get('buildLogs'); [print(l.get('message','')) for l in logs] if logs else print('no buildLogs. errors=', d.get('errors'))"
-            echo "===== DEPLOY LOGS ====="
-            q2='{"query":"query($d:String!){deploymentLogs(deploymentId:$d){message}}","variables":{"d":"'"$DEP_ID"'"}}'
-            curl -sS -X POST https://backboard.railway.app/graphql/v2 \
-              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
-              --data "$q2" \
-              | python3 -c "import json,sys; d=json.load(sys.stdin); logs=(d.get('data') or {}).get('deploymentLogs'); [print(l.get('message','')) for l in logs] if logs else print('no deploymentLogs. errors=', d.get('errors'))"
-          fi
-          exit $UPCODE
+
+      - name: Diagnose (deployment status + project services)
+        if: always()
+        run: |
+          gql() { curl -sS -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" --data "$1"; }
+          echo "===== deployment status ====="
+          gql '{"query":"query($d:String!){deployment(id:$d){id status}}","variables":{"d":"'"$DEP_ID"'"}}' \
+            | python3 -m json.tool || true
+          echo "===== build logs ====="
+          gql '{"query":"query($d:String!){buildLogs(deploymentId:$d){message}}","variables":{"d":"'"$DEP_ID"'"}}' \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); l=(d.get('data') or {}).get('buildLogs'); print('\n'.join(x.get('message','') for x in l) if l else ('errors='+str(d.get('errors'))))" || true
+          echo "===== services in project ====="
+          gql '{"query":"query($p:String!){project(id:$p){name services{edges{node{id name}}}}}","variables":{"p":"'"$PROJECT_ID"'"}}' \
+            | python3 -m json.tool || true
+          echo "===== project plan / disabled? ====="
+          gql '{"query":"query($p:String!){project(id:$p){id isPublic isTempProject baseEnvironmentId}}","variables":{"p":"'"$PROJECT_ID"'"}}' \
+            | python3 -m json.tool || true
 
       - name: Ensure public domain
         id: domain
