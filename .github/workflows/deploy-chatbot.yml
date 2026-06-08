@@ -75,6 +75,20 @@ jobs:
       - name: Link project + environment
         run: railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID"
 
+      - name: Set service root directory = chatbot-service
+        run: |
+          set -e
+          gql() { curl -sS -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" --data "$1"; }
+          SID=$(gql '{"query":"query($p:String!){project(id:$p){services{edges{node{id name}}}}}","variables":{"p":"'"$PROJECT_ID"'"}}' \
+            | python3 -c "import json,sys;d=json.load(sys.stdin);print(next((n['node']['id'] for n in d['data']['project']['services']['edges'] if n['node']['name']=='$SERVICE_NAME'),''))")
+          [ -n "$SID" ] || { echo "::error::chatbot-service not found"; exit 1; }
+          echo "CHATBOT_SERVICE_ID=$SID" >> "$GITHUB_ENV"
+          echo "service id: $SID — setting rootDirectory=chatbot-service"
+          RESP=$(gql '{"query":"mutation($s:String!,$e:String!,$i:ServiceInstanceUpdateInput!){serviceInstanceUpdate(serviceId:$s,environmentId:$e,input:$i)}","variables":{"s":"'"$SID"'","e":"'"$ENVIRONMENT_ID"'","i":{"rootDirectory":"chatbot-service"}}}')
+          echo "$RESP" | python3 -c "import json,sys;d=json.load(sys.stdin);print('serviceInstanceUpdate:',d.get('data'));print('errors:',d.get('errors'))"
+          echo "$RESP" | python3 -c "import json,sys;d=json.load(sys.stdin);sys.exit(1 if d.get('errors') else 0)"
+
       # NOTE: the chatbot service + Redis were created on the first run; this
       # workflow is now idempotent-by-existence (re-running just re-deploys).
 
