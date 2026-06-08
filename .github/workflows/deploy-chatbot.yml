@@ -75,17 +75,8 @@ jobs:
       - name: Link project + environment
         run: railway link --project "$PROJECT_ID" --environment "$ENVIRONMENT_ID"
 
-      - name: Ensure chatbot service exists
-        continue-on-error: true
-        run: |
-          railway add --service "$SERVICE_NAME" 2>&1 | tee /tmp/add.log \
-            || echo "service add returned non-zero (may already exist) — continuing"
-
-      - name: Ensure Redis exists
-        continue-on-error: true
-        run: |
-          railway add --database redis 2>&1 | tee /tmp/redis.log \
-            || echo "redis add returned non-zero (may already exist) — continuing"
+      # NOTE: the chatbot service + Redis were created on the first run; this
+      # workflow is now idempotent-by-existence (re-running just re-deploys).
 
       - name: Set service variables
         run: |
@@ -105,9 +96,14 @@ jobs:
             --set "REDIS_URL=${REDIS_REF}" \
             --skip-deploys
 
-      - name: Deploy (railway up)
+      - name: Deploy (railway up — stream build logs)
         working-directory: chatbot-service
-        run: railway up --service "$SERVICE_NAME" --ci
+        run: |
+          # No --ci, so the actual build/deploy logs stream here (the --ci form
+          # only prints a URL + "Deploy failed"). Timeout guards against tailing.
+          timeout --preserve-status 600 railway up --service "$SERVICE_NAME" || {
+            code=$?; echo "railway up exited $code"; exit $code;
+          }
 
       - name: Ensure public domain
         id: domain
