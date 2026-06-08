@@ -1,0 +1,124 @@
+name: Deploy Chatbot Service (Railway)
+
+# Deploys chatbot-service/ to Railway from a GitHub runner (which CAN reach
+# railway.app). Driven via `gh workflow run` or a push touching chatbot-service/.
+#
+# Required GitHub secrets (microservices repo):
+#   RAILWAY_TOKEN          a Railway *project* token (Project -> Settings -> Tokens)
+#   OPENAI_API_KEY         the project OpenAI key
+#   AI_CHAT_SHARED_SECRET  one shared secret (= SERVICE_API_KEY = PERSIST_KEY,
+#                          and must match the shop's CHATBOT_SERVICE_API_KEY +
+#                          the API's AI_CHAT_SERVICE_API_KEY)
+#
+# Optional inputs let you point persist/CORS at prod instead of staging.
+
+on:
+  workflow_dispatch:
+    inputs:
+      persist_url:
+        description: 'Laravel persist endpoint'
+        required: false
+        default: 'https://plantathome-production.up.railway.app/api/ai-chat/persist'
+      cors_origins:
+        description: 'Allowed shop origins (comma-separated)'
+        required: false
+        default: 'https://plantathome-shop-staging.vercel.app'
+      service_name:
+        description: 'Railway service name'
+        required: false
+        default: 'chatbot-service'
+  push:
+    branches: [main]
+    paths:
+      - 'chatbot-service/**'
+      - '.github/workflows/deploy-chatbot.yml'
+
+jobs:
+  deploy:
+    name: Railway deploy
+    runs-on: ubuntu-latest
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      SERVICE_NAME: ${{ github.event.inputs.service_name || 'chatbot-service' }}
+      PERSIST_URL: ${{ github.event.inputs.persist_url || 'https://plantathome-production.up.railway.app/api/ai-chat/persist' }}
+      CORS_ORIGINS: ${{ github.event.inputs.cors_origins || 'https://plantathome-shop-staging.vercel.app' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Preflight — required secrets present
+        run: |
+          missing=0
+          for s in RAILWAY_TOKEN OPENAI_API_KEY AI_CHAT_SHARED_SECRET; do
+            if [ -z "${!s}" ]; then echo "::error::Missing secret $s"; missing=1; fi
+          done
+          [ "$missing" = "0" ] || { echo "Add the secrets, then re-run."; exit 1; }
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AI_CHAT_SHARED_SECRET: ${{ secrets.AI_CHAT_SHARED_SECRET }}
+
+      - name: Install Railway CLI
+        run: |
+          npm i -g @railway/cli
+          railway --version
+
+      - name: Whoami (verify token)
+        run: railway whoami || echo "whoami not supported with a project token — continuing"
+
+      - name: Provision Redis (idempotent)
+        continue-on-error: true
+        run: |
+          # CLI v4 uses --database; older uses --plugin. Try both, tolerate "already exists".
+          railway add --database redis 2>&1 | tee /tmp/redis.log \
+            || railway add --plugin redis 2>&1 | tee -a /tmp/redis.log \
+            || echo "Redis add returned non-zero (likely already provisioned) — continuing"
+
+      - name: Set service variables
+        run: |
+          set -x
+          railway variables \
+            --service "$SERVICE_NAME" \
+            --set "OPENAI_API_KEY=${OPENAI_API_KEY}" \
+            --set "OPENAI_MODEL=gpt-4o-mini" \
+            --set "SERVICE_API_KEY=${SHARED}" \
+            --set "PERSIST_KEY=${SHARED}" \
+            --set "PERSIST_URL=${PERSIST_URL}" \
+            --set "CORS_ORIGINS=${CORS_ORIGINS}"
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SHARED: ${{ secrets.AI_CHAT_SHARED_SECRET }}
+
+      - name: Deploy (railway up)
+        working-directory: chatbot-service
+        run: railway up --service "$SERVICE_NAME" --ci
+
+      - name: Ensure public domain
+        id: domain
+        continue-on-error: true
+        run: |
+          out=$(railway domain --service "$SERVICE_NAME" 2>&1 || true)
+          echo "$out"
+          url=$(echo "$out" | grep -oE 'https://[a-zA-Z0-9.-]+\.up\.railway\.app' | head -1)
+          echo "service_url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Health check + summary
+        run: |
+          URL="${{ steps.domain.outputs.service_url }}"
+          {
+            echo "## Chatbot service deploy"
+            echo ""
+            if [ -n "$URL" ]; then
+              echo "- Service URL: \`$URL\`"
+              echo ""
+              echo "### /health"
+              echo '```'
+              curl -fsS --max-time 25 "$URL/health" || echo "health not reachable yet (build may still be finishing)"
+              echo '```'
+              echo ""
+              echo "Next: set shop \`CHATBOT_SERVICE_URL=$URL\` + \`CHATBOT_SERVICE_API_KEY=<shared>\`,"
+              echo "and API \`AI_CHAT_SERVICE_API_KEY=<shared>\`, then enable in admin."
+            else
+              echo "- Could not auto-detect the domain. Generate one in the Railway dashboard"
+              echo "  (service → Settings → Networking → Generate Domain) and re-run."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
