@@ -1,47 +1,66 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+import asyncio
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from models import ChatRequest, ChatResponse, SessionHistoryResponse
-from chat_service import chat, get_session_history, clear_session
-import anthropic
+
+from models import AskRequest, AskResponse, EndRequest, HealthResponse
+from auth import verify_api_key
+import ask_service
+
+SWEEP_INTERVAL = int(os.getenv("SWEEP_INTERVAL", "60"))
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+
+
+async def _sweeper():
+    """Background flush of abandoned conversations -> one DB row each."""
+    while True:
+        try:
+            await ask_service.sweep_idle()
+        except Exception:
+            pass
+        await asyncio.sleep(SWEEP_INTERVAL)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(_sweeper())
+    yield
+    task.cancel()
+
 
 app = FastAPI(
-    title="PlantAtHome AI Chatbot Service",
-    description="Memory-based AI plant care assistant powered by Claude",
-    version="1.0.0",
+    title="PlantAtHome Ask-AI Chatbot Service",
+    description="Per-plant, topic-scoped AI chat. Async + Redis, built to scale.",
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS or ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "service": "chatbot-service"}
+@app.get("/health", response_model=HealthResponse)
+async def health():
+    return HealthResponse(status="ok", service="ask-ai-chatbot", redis=await ask_service.redis_ping())
 
 
-@app.post("/chat", response_model=ChatResponse)
-def chat_endpoint(request: ChatRequest):
+@app.post("/ask", response_model=AskResponse)
+async def ask_endpoint(request: AskRequest, _=Depends(verify_api_key)):
     try:
-        return chat(request)
-    except anthropic.APIError as e:
-        raise HTTPException(status_code=502, detail=f"AI service error: {str(e)}")
+        return await ask_service.ask(request)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/chat/history/{session_id}", response_model=SessionHistoryResponse)
-def get_history(session_id: str):
-    return get_session_history(session_id)
-
-
-@app.delete("/chat/history/{session_id}")
-def delete_session(session_id: str):
-    clear_session(session_id)
-    return {"message": "Session cleared", "session_id": session_id}
+@app.post("/end")
+async def end_endpoint(request: EndRequest, _=Depends(verify_api_key)):
+    return await ask_service.end(request.conversation_id)

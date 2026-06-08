@@ -1,41 +1,60 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
-from enum import Enum
 
 
-class MessageRole(str, Enum):
-    user = "user"
-    assistant = "assistant"
+class PlantContext(BaseModel):
+    """Identifies the single plant a conversation is scoped to."""
+    id: Optional[int] = None
+    name: str
+    scientific_name: Optional[str] = None
+    # Free-form key facts (care/attributes) the storefront already has, so the
+    # model can answer grounded questions without an extra DB hit.
+    facts: Optional[str] = None
 
 
-class ChatMessage(BaseModel):
-    role: MessageRole
-    content: str
-
-
-class ChatRequest(BaseModel):
+class AskRequest(BaseModel):
+    user_id: int
+    plant: PlantContext
     message: str
-    session_id: Optional[str] = None
+    conversation_id: Optional[str] = None
     language: Optional[str] = "en"
 
     class Config:
         json_schema_extra = {
             "example": {
-                "message": "Why are my leaves turning yellow?",
-                "session_id": "user_123_session",
-                "language": "en"
+                "user_id": 42,
+                "plant": {
+                    "id": 7,
+                    "name": "Monstera Deliciosa",
+                    "scientific_name": "Monstera deliciosa",
+                    "facts": "Bright indirect light; water when top 2in dry; toxic to pets.",
+                },
+                "message": "How often should I water it in Mumbai summer?",
+                "conversation_id": None,
+                "language": "en",
             }
         }
 
 
-class ChatResponse(BaseModel):
+class TokenUsage(BaseModel):
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    model: str = "gpt-4o-mini"
+
+
+class AskResponse(BaseModel):
     reply: str
-    session_id: str
-    suggested_products: Optional[list[str]] = None
-    follow_up_questions: Optional[list[str]] = None
+    conversation_id: str
+    prompt_count: int
+    limit_reached: bool = False
+    usage: TokenUsage = Field(default_factory=TokenUsage)
 
 
-class SessionHistoryResponse(BaseModel):
-    session_id: str
-    messages: list[ChatMessage]
-    total_messages: int
+class EndRequest(BaseModel):
+    conversation_id: str
+
+
+class HealthResponse(BaseModel):
+    status: str
+    service: str
+    redis: str

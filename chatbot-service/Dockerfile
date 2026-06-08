@@ -9,4 +9,6 @@ COPY . .
 
 EXPOSE 8002
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002"]
+# Railway injects $PORT; default to 8002 locally. WEB_CONCURRENCY tunes the
+# async worker count (the chat path is I/O-bound, so a few workers go far).
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8002} --workers ${WEB_CONCURRENCY:-2}"]
