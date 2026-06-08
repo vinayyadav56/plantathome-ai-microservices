@@ -1,16 +1,18 @@
 name: Deploy Chatbot Service (Railway)
 
-# Deploys chatbot-service/ to Railway from a GitHub runner (which CAN reach
-# railway.app). Driven via `gh workflow run` or a push touching chatbot-service/.
+# OPTIONAL / FALLBACK ONLY. The PlantAtHome stack normally deploys via Railway's
+# native GitHub integration (a service connected to this repo + root dir =
+# chatbot-service auto-builds on push) — see chatbot-service/DEPLOY_ASK_AI.md.
+# This workflow is the alternative CLI route for when you'd rather deploy with a
+# Railway *project* token. It is MANUAL-ONLY (workflow_dispatch) so it never
+# auto-fails on push; run it from the Actions tab or `gh workflow run`.
 #
-# Required GitHub secrets (microservices repo):
+# Required GitHub secrets (this repo) before running:
 #   RAILWAY_TOKEN          a Railway *project* token (Project -> Settings -> Tokens)
 #   OPENAI_API_KEY         the project OpenAI key
 #   AI_CHAT_SHARED_SECRET  one shared secret (= SERVICE_API_KEY = PERSIST_KEY,
 #                          and must match the shop's CHATBOT_SERVICE_API_KEY +
 #                          the API's AI_CHAT_SERVICE_API_KEY)
-#
-# Optional inputs let you point persist/CORS at prod instead of staging.
 
 on:
   workflow_dispatch:
@@ -27,11 +29,6 @@ on:
         description: 'Railway service name'
         required: false
         default: 'chatbot-service'
-  push:
-    branches: [main]
-    paths:
-      - 'chatbot-service/**'
-      - '.github/workflows/deploy-chatbot.yml'
 
 jobs:
   deploy:
