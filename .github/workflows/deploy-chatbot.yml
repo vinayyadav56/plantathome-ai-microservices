@@ -89,7 +89,12 @@ jobs:
 
       - name: Set service variables
         run: |
-          set -x
+          set -e
+          # Assemble the Railway cross-service reference in bash so the GitHub
+          # expression opener never appears literally in this run block.
+          B='{'; C='}'
+          REDIS_REF="\$${B}${B}Redis.REDIS_URL${C}${C}"   # yields the Railway ref
+          echo "Redis ref: $REDIS_REF"
           railway variables --service "$SERVICE_NAME" \
             --set "OPENAI_API_KEY=${OPENAI_API_KEY}" \
             --set "OPENAI_MODEL=gpt-4o-mini" \
@@ -97,7 +102,7 @@ jobs:
             --set "PERSIST_KEY=${SHARED}" \
             --set "PERSIST_URL=${PERSIST_URL}" \
             --set "CORS_ORIGINS=${CORS_ORIGINS}" \
-            --set 'REDIS_URL=${{Redis.REDIS_URL}}' \
+            --set "REDIS_URL=${REDIS_REF}" \
             --skip-deploys
 
       - name: Deploy (railway up)
