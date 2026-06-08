@@ -110,6 +110,15 @@ jobs:
             --set "REDIS_URL=${REDIS_REF}" \
             --skip-deploys
 
+      - name: Set AI_CHAT_SERVICE_API_KEY on the API service
+        run: |
+          set -e
+          API_SERVICE_ID=da92f9ad-814e-4e0e-a0bb-932268379c6b
+          RESP=$(curl -sS -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+            --data '{"query":"mutation($i:VariableUpsertInput!){variableUpsert(input:$i)}","variables":{"i":{"projectId":"'"$PROJECT_ID"'","environmentId":"'"$ENVIRONMENT_ID"'","serviceId":"'"$API_SERVICE_ID"'","name":"AI_CHAT_SERVICE_API_KEY","value":"'"$SHARED"'"}}}')
+          echo "$RESP" | python3 -c "import json,sys;d=json.load(sys.stdin);print('API variableUpsert:',d.get('data'),'errors:',d.get('errors'));sys.exit(1 if d.get('errors') else 0)"
+
       - name: Deploy (railway up)
         id: up
         continue-on-error: true
